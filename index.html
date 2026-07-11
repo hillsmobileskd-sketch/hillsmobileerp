@@ -884,6 +884,7 @@ async function saveData(){
     syncCustomersToCloud(); // fire-and-forget; local save above already succeeded either way
     syncMobilesToCloud(); // fire-and-forget; same pattern as customers
     syncSuppliersToCloud(); // fire-and-forget; same pattern as customers
+    syncPurchasesToCloud(); // fire-and-forget; supplier_id resolved via cloud supplier lookup
     return true;
   }catch(e){
     uiAlert('Problem saving data in this browser. Storage might be full or blocked (private/incognito mode). Please take a backup regularly using the Backup button in Settings.');
@@ -926,6 +927,47 @@ async function syncCustomersToCloud(){
       await supabaseClient.from('customers').insert(rows);
     }
   }catch(e){ console.error('Cloud sync failed (customers):', e); /* local data already saved, so nothing is lost */ }
+}
+// Purchases need their supplier linked in the cloud, but local supplier IDs (e.g. "sup_...")
+// aren't real UUIDs, so we can't use them directly as the foreign key. Instead, we fetch this
+// store's cloud suppliers (name+phone), build a lookup, and match each local purchase's supplier
+// by name+phone to find the correct cloud supplier UUID. If no match is found, supplier_id is
+// left null (purchase still syncs, just without the supplier link).
+async function syncPurchasesToCloud(){
+  if(!supabaseClient) return;
+  const store = STORES.find(s=>s.id===currentStoreId);
+  if(!store) return;
+  try{
+    const cloudStoreId = await ensureCloudStoreId(store);
+    if(!cloudStoreId) return;
+    const { data: cloudSuppliers } = await supabaseClient.from('suppliers').select('id,name,phone').eq('store_id', cloudStoreId);
+    const supplierMap = {};
+    (cloudSuppliers||[]).forEach(cs=>{
+      const key = (cs.name||'').trim().toLowerCase()+'|'+(cs.phone||'').trim();
+      supplierMap[key] = cs.id;
+    });
+    await supabaseClient.from('purchases').delete().eq('store_id', cloudStoreId);
+    if(DATA.purchases && DATA.purchases.length){
+      const rows = DATA.purchases.map(p=>{
+        const sup = DATA.suppliers.find(s=>s.id===p.supplierId);
+        let cloudSupplierId = null;
+        if(sup){
+          const key = (sup.name||'').trim().toLowerCase()+'|'+(sup.phone||'').trim();
+          cloudSupplierId = supplierMap[key] || null;
+        }
+        return {
+          store_id: cloudStoreId,
+          no: p.no!=null ? Number(p.no) : null,
+          supplier_id: cloudSupplierId,
+          date: p.date||null,
+          total_amount: p.totalAmount!=null ? Number(p.totalAmount) : null,
+          supplier_invoice_no: p.supplierInvoiceNo||null,
+          items: p.items || null
+        };
+      });
+      await supabaseClient.from('purchases').insert(rows);
+    }
+  }catch(e){ console.error('Cloud sync failed (purchases):', e); }
 }
 // Same "full replace" pattern as customers.
 async function syncSuppliersToCloud(){
@@ -1012,10 +1054,26 @@ async function pullFromCloudIfEmpty(){
         changed = true;
       }
     }
+    let supplierCloudToLocal = {}; // built below when suppliers are pulled; used by purchases pull
     if((!DATA.suppliers || DATA.suppliers.length===0)){
       const {data: rows} = await supabaseClient.from('suppliers').select('*').eq('store_id', cloudStoreId);
       if(rows && rows.length){
-        DATA.suppliers = rows.map(r=>({id:uid('sup'), name:r.name||'', phone:r.phone||'', address:r.address||''}));
+        DATA.suppliers = rows.map(r=>{
+          const localId = uid('sup');
+          supplierCloudToLocal[r.id] = localId;
+          return {id:localId, name:r.name||'', phone:r.phone||'', address:r.address||''};
+        });
+        changed = true;
+      }
+    }
+    if((!DATA.purchases || DATA.purchases.length===0)){
+      const {data: rows} = await supabaseClient.from('purchases').select('*').eq('store_id', cloudStoreId);
+      if(rows && rows.length){
+        DATA.purchases = rows.map(r=>({
+          id: uid('pur'), no: r.no, supplierId: r.supplier_id ? (supplierCloudToLocal[r.supplier_id]||null) : null,
+          date: r.date||'', supplierInvoiceNo: r.supplier_invoice_no||'', items: r.items||[],
+          totalAmount: r.total_amount!=null ? Number(r.total_amount) : 0
+        }));
         changed = true;
       }
     }
