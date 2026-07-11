@@ -883,6 +883,7 @@ async function saveData(){
     localStorage.setItem(currentStorageKey(), JSON.stringify(DATA));
     syncCustomersToCloud(); // fire-and-forget; local save above already succeeded either way
     syncMobilesToCloud(); // fire-and-forget; same pattern as customers
+    syncSuppliersToCloud(); // fire-and-forget; same pattern as customers
     return true;
   }catch(e){
     uiAlert('Problem saving data in this browser. Storage might be full or blocked (private/incognito mode). Please take a backup regularly using the Backup button in Settings.');
@@ -925,6 +926,21 @@ async function syncCustomersToCloud(){
       await supabaseClient.from('customers').insert(rows);
     }
   }catch(e){ console.error('Cloud sync failed (customers):', e); /* local data already saved, so nothing is lost */ }
+}
+// Same "full replace" pattern as customers.
+async function syncSuppliersToCloud(){
+  if(!supabaseClient) return;
+  const store = STORES.find(s=>s.id===currentStoreId);
+  if(!store) return;
+  try{
+    const cloudStoreId = await ensureCloudStoreId(store);
+    if(!cloudStoreId) return;
+    await supabaseClient.from('suppliers').delete().eq('store_id', cloudStoreId);
+    if(DATA.suppliers && DATA.suppliers.length){
+      const rows = DATA.suppliers.map(s=>({store_id: cloudStoreId, name: s.name||'', phone: s.phone||'', address: s.address||''}));
+      await supabaseClient.from('suppliers').insert(rows);
+    }
+  }catch(e){ console.error('Cloud sync failed (suppliers):', e); /* local data already saved, so nothing is lost */ }
 }
 // Same "full replace" pattern as customers. Note: customer_id, from_customer_id, invoice_id,
 // from_invoice_id, supplier_id, purchase_id are intentionally left null for now — this app's
@@ -993,6 +1009,13 @@ async function pullFromCloudIfEmpty(){
           purchaseDate:r.purchase_date||undefined, hsnCode:r.hsn_code||'', gstRate:r.gst_rate,
           source:r.source||undefined, condition:r.condition||undefined, linkedSaleReversed:!!r.linked_sale_reversed
         }));
+        changed = true;
+      }
+    }
+    if((!DATA.suppliers || DATA.suppliers.length===0)){
+      const {data: rows} = await supabaseClient.from('suppliers').select('*').eq('store_id', cloudStoreId);
+      if(rows && rows.length){
+        DATA.suppliers = rows.map(r=>({id:uid('sup'), name:r.name||'', phone:r.phone||'', address:r.address||''}));
         changed = true;
       }
     }
