@@ -236,6 +236,10 @@ const fbDb = firebase.firestore();
 // Manager account. Firebase's client SDK logs you in as whichever user you just created,
 // which would kick the Owner out of their own session. Creating the manager account on
 // this separate app instance avoids touching the Owner's real signed-in session.
+// This is safe (no Cloud Function needed) because the Firestore rules below are what
+// actually gate who can write a role document — only a signed-in Owner can write any
+// users/{uid} doc, and only the first-ever account can self-assign 'owner'. Creating the
+// Auth login itself carries no privilege on its own.
 const fbAdminApp = firebase.initializeApp(firebaseConfig, 'adminHelper');
 
 // ---------- CLOUD DATA SYNC (all business-data collections) ----------
