@@ -617,7 +617,7 @@ async function setStorePassword(store, newPassword){
 //          the call never depended on the user having dismissed the native dialog.
 // uiConfirm / uiPrompt: return a Promise, so callers must `await` them — the
 //          calling function needs to be `async` for this to work.
-function showUiModal({message, mode, defaultValue, resolve}){
+function showUiModal({message, mode, defaultValue, inputType, resolve}){
   const overlay = document.getElementById('uiModalOverlay');
   const msgEl = document.getElementById('uiModalMessage');
   const inputWrap = document.getElementById('uiModalInputWrap');
@@ -631,7 +631,7 @@ function showUiModal({message, mode, defaultValue, resolve}){
   }
   msgEl.textContent = message;
   actionsEl.innerHTML = '';
-  if(mode==='prompt'){ inputWrap.style.display='block'; inputEl.value = defaultValue||''; }
+  if(mode==='prompt'){ inputWrap.style.display='block'; inputEl.value = defaultValue||''; inputEl.type = inputType||'text'; }
   else { inputWrap.style.display='none'; }
 
   const onKeydown = (e)=>{
@@ -668,7 +668,7 @@ function showUiModal({message, mode, defaultValue, resolve}){
 }
 function uiAlert(message){ showUiModal({message, mode:'alert'}); }
 function uiConfirm(message){ return new Promise(resolve=>showUiModal({message, mode:'confirm', resolve})); }
-function uiPrompt(message, defaultValue){ return new Promise(resolve=>showUiModal({message, mode:'prompt', defaultValue, resolve})); }
+function uiPrompt(message, defaultValue, inputType){ return new Promise(resolve=>showUiModal({message, mode:'prompt', defaultValue, inputType, resolve})); }
 
 // Helpers for displaying IMEI vs. a placeholder when an exchanged phone had no real IMEI recorded
 // (in that case a generated EXC_... ID is used internally as a stand-in key, but must never be shown to the user as if it were a real IMEI)
@@ -1829,6 +1829,7 @@ function renderSettings(){
     <div class="card">
       <b>🔐 Login</b>
       <div class="sub">Login ab email/password se hota hai (Firebase account) — ye is store ki settings se nahi, seedha login screen se manage hota hai. Naye manager accounts owner store-picker screen se "+ Nayi Store + Manager Banayein" se banaye ja sakte hain.</div>
+      <div style="margin-top:10px"><button class="btn outline sm" id="changePasswordBtn">🔑 Apna Password Badlein</button></div>
     </div>
     <div class="card">
       <b>🏬 Store Management</b>
@@ -4174,6 +4175,32 @@ function attachHandlers(){
     await saveData();
     uiAlert('✅ Sab data reset ho gaya. App ab bilkul fresh state me hai.');
     render();
+  };
+
+  const changePasswordBtn = document.getElementById('changePasswordBtn');
+  if(changePasswordBtn) changePasswordBtn.onclick=async ()=>{
+    const user = fbAuth.currentUser;
+    if(!user || !user.email){ uiAlert('Login state check nahi ho paaya — kripya dobara login karein.'); return; }
+    const currentPw = await uiPrompt('Apna CURRENT password daalein:', '', 'password');
+    if(currentPw===null) return;
+    if(!currentPw){ uiAlert('Current password khaali nahi ho sakta.'); return; }
+    const newPw = await uiPrompt('Naya password daalein (kam se kam 6 characters):', '', 'password');
+    if(newPw===null) return;
+    if(!newPw || newPw.length<6){ uiAlert('Naya password kam se kam 6 characters ka hona chahiye.'); return; }
+    const confirmPw = await uiPrompt('Naya password dobara type karein (confirm):', '', 'password');
+    if(confirmPw===null) return;
+    if(confirmPw!==newPw){ uiAlert('Dono password match nahi hue — kripya dobara try karein.'); return; }
+    try{
+      const cred = firebase.auth.EmailAuthProvider.credential(user.email, currentPw);
+      await user.reauthenticateWithCredential(cred);
+      await user.updatePassword(newPw);
+      uiAlert('✅ Password safaltapoorvak badal gaya. Agli baar isi naye password se login karein.');
+    }catch(e){
+      if(e && e.code==='auth/wrong-password'){ uiAlert('Current password galat hai — kripya dobara try karein.'); }
+      else if(e && e.code==='auth/too-many-requests'){ uiAlert('Bahut zyada attempts ho gaye — kuch der baad dobara try karein.'); }
+      else if(e && e.code==='auth/network-request-failed'){ uiAlert('Internet connection check karein aur dobara try karein.'); }
+      else { uiAlert('Password change nahi ho paya: '+(e&&e.message?e.message:'Unknown error')); }
+    }
   };
 
   const changePinBtn = document.getElementById('changePinBtn');
